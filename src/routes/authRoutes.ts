@@ -8,7 +8,7 @@ const router = Router();
 // Rate limit: 5 attempts per 15 minutes per IP
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: 50,
   message: { error: 'Too many attempts — please try again in 15 minutes' },
   standardHeaders: true,
   legacyHeaders: false,
