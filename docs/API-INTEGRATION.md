@@ -47,6 +47,14 @@ Both cookies are **HttpOnly**, **Secure** (production), and **SameSite=Strict**.
 
 ### Recommended auth flow
 
+**Sign up (Figma screens 1–2):**
+```
+1. POST /auth/register       → account created, OTP emailed (unverified)
+2. POST /auth/verify-otp     → purpose: "signup", 6-digit code
+3. POST /auth/login          → cookies set; user.emailVerified must be true
+```
+
+**Returning user:**
 ```
 1. POST /auth/login          → cookies set automatically
 2. All API calls             → cookies sent automatically (withCredentials)
@@ -54,6 +62,23 @@ Both cookies are **HttpOnly**, **Secure** (production), and **SameSite=Strict**.
 4. If refresh fails          → redirect to login
 5. POST /auth/logout         → clears cookies server-side
 ```
+
+**Forgot password (Figma login → reset):**
+```
+1. POST /auth/forgot-password → always returns generic success message
+2. POST /auth/reset-password  → email + code + newPassword (verifies OTP inline)
+```
+
+**BVN onboarding (Figma screens 2/3–Connect Accounts):**
+```
+1. GET  /onboarding/status        → check currentStep after login
+2. POST /onboarding/bvn/submit      → bvn + phone (mock validation, sends SMS OTP)
+3. POST /onboarding/bvn/verify-otp  → 6-digit phone code
+4. GET  /onboarding/bvn/accounts    → discovered accounts from mock BVN lookup
+5. POST /onboarding/bvn/connect     → link selected accountIds
+```
+
+BVN lookup and SMS are **mocked** — OTPs log to the server console; `devOtp` in development responses.
 
 ### CORS requirement
 
@@ -102,7 +127,10 @@ In development only, some 500 responses include `"details"`.
 
 | Endpoint group | Limit |
 |----------------|-------|
-| Auth (`register`, `login`) | 5 requests / 15 min per IP |
+| Auth (`register`, `login`) | 50 requests / 15 min per IP |
+| OTP (`send-otp`, `verify-otp`, `forgot-password`, `reset-password`) | 10 requests / 15 min per IP |
+| Onboarding (`/onboarding/*`) | 20 requests / 15 min per user |
+| Onboarding OTP (`send-otp`, `verify-otp`) | 10 requests / 15 min per user |
 | Account linking | 5 requests / 10 min per user |
 | Transfers & bill payment | 10 requests / 10 min per user |
 
@@ -135,23 +163,146 @@ No auth. Use for uptime checks and cold-start probing.
 ```json
 {
   "email": "user@example.com",
-  "username": "chike",
-  "password": "SecurePass123"
+  "fullName": "Chike Okafor",
+  "password": "SecurePass123",
+  "confirmPassword": "SecurePass123",
+  "termsAccepted": true
 }
 ```
 
 | Field | Required | Rules |
 |-------|----------|-------|
 | `email` | Yes | Valid email |
+| `fullName` | Yes | Max 100 characters |
 | `password` | Yes | Min 8 characters |
+| `confirmPassword` | No | If sent, must match `password` |
+| `termsAccepted` | Yes | Must be `true` |
 | `username` | No | Optional display name |
 
 **Response `201`:**
 ```json
 {
-  "message": "Account created successfully",
-  "userId": "665a1b2c3d4e5f6789012345"
+  "message": "Account created — verification code sent to your email",
+  "userId": "665a1b2c3d4e5f6789012345",
+  "emailVerified": false,
+  "requiresVerification": true,
+  "resendAvailableIn": 30,
+  "devOtp": "482910"
 }
+```
+
+`devOtp` is only returned when `NODE_ENV=development` and email is mocked (no `RESEND_API_KEY`).
+
+---
+
+#### `POST /api/v1/auth/send-otp`
+
+Resend a 6-digit email code. 30-second cooldown per email + purpose.
+
+**Body:**
+```json
+{
+  "email": "user@example.com",
+  "purpose": "signup"
+}
+```
+
+| `purpose` | Use case |
+|-----------|----------|
+| `signup` | Verify email after registration |
+| `reset` | Password reset flow |
+
+**Response `200`:**
+```json
+{
+  "message": "Verification code sent",
+  "resendAvailableIn": 30,
+  "devOtp": "482910"
+}
+```
+
+**Response `429`** (cooldown):
+```json
+{
+  "error": "Please wait before requesting a new code",
+  "resendAvailableIn": 18
+}
+```
+
+---
+
+#### `POST /api/v1/auth/verify-otp`
+
+**Body:**
+```json
+{
+  "email": "user@example.com",
+  "code": "482910",
+  "purpose": "signup"
+}
+```
+
+**Response `200`** (`purpose: signup`):
+```json
+{
+  "message": "Email verified successfully",
+  "emailVerified": true,
+  "user": {
+    "id": "665a1b2c3d4e5f6789012345",
+    "email": "user@example.com",
+    "fullName": "Chike Okafor",
+    "bvnVerified": false
+  }
+}
+```
+
+**Response `200`** (`purpose: reset` — code only, no password change yet):
+```json
+{
+  "message": "Verification code accepted",
+  "verified": true
+}
+```
+
+---
+
+#### `POST /api/v1/auth/forgot-password`
+
+Always returns the same message (prevents email enumeration).
+
+**Body:**
+```json
+{ "email": "user@example.com" }
+```
+
+**Response `200`:**
+```json
+{
+  "message": "If an account exists for this email, a verification code has been sent",
+  "devOtp": "482910"
+}
+```
+
+`devOtp` is only present in development when the email exists and email is mocked.
+
+---
+
+#### `POST /api/v1/auth/reset-password`
+
+Verifies the reset OTP and sets a new password in one step.
+
+**Body:**
+```json
+{
+  "email": "user@example.com",
+  "code": "482910",
+  "newPassword": "NewSecurePass123"
+}
+```
+
+**Response `200`:**
+```json
+{ "message": "Password reset successfully" }
 ```
 
 ---
@@ -172,8 +323,20 @@ No auth. Use for uptime checks and cold-start probing.
   "message": "Login successful",
   "user": {
     "id": "665a1b2c3d4e5f6789012345",
-    "email": "demo@pocketsync.ng"
+    "email": "demo@pocketsync.ng",
+    "fullName": "Demo User",
+    "emailVerified": true,
+    "bvnVerified": false
   }
+}
+```
+
+**Response `403`** (email not verified — redirect to OTP screen):
+```json
+{
+  "error": "Email not verified — please check your inbox for the 6-digit code",
+  "requiresVerification": true,
+  "email": "user@example.com"
 }
 ```
 
@@ -200,6 +363,134 @@ No body. Sends `refreshToken` cookie automatically.
 ```
 
 Call this when any protected route returns `401` with `"Session expired — please log in again"`.
+
+---
+
+### Onboarding (mock BVN — requires auth cookie)
+
+All routes require a logged-in, email-verified user.
+
+#### `GET /api/v1/onboarding/status`
+
+**Response `200`:**
+```json
+{
+  "emailVerified": true,
+  "bvnVerified": false,
+  "phoneVerified": false,
+  "currentStep": "bvn_entry",
+  "maskedPhone": "+234 *** *** 5678",
+  "pendingAccounts": 0,
+  "linkedAccounts": 0,
+  "onboardingComplete": false
+}
+```
+
+| `currentStep` | Frontend route |
+|---------------|----------------|
+| `bvn_entry` | Enter BVN + phone |
+| `phone_otp` | Verify phone OTP |
+| `connect_accounts` | Connect discovered accounts |
+| `complete` | Dashboard |
+
+---
+
+#### `POST /api/v1/onboarding/bvn/submit`
+
+Mock BVN validation — any valid 11-digit BVN works (not real NIBSS lookup).
+
+**Body:**
+```json
+{
+  "bvn": "22234567890",
+  "phone": "08012345678"
+}
+```
+
+**Response `200`:**
+```json
+{
+  "message": "BVN accepted — verification code sent to your phone",
+  "maskedPhone": "+234 *** *** 5678",
+  "resendAvailableIn": 30,
+  "devOtp": "482910"
+}
+```
+
+---
+
+#### `POST /api/v1/onboarding/bvn/send-otp`
+
+Resend phone OTP (30s cooldown). No body required.
+
+---
+
+#### `POST /api/v1/onboarding/bvn/verify-otp`
+
+**Body:**
+```json
+{ "code": "482910" }
+```
+
+**Response `200`:**
+```json
+{
+  "message": "Phone verified — accounts discovered from your BVN",
+  "bvnVerified": true,
+  "phoneVerified": true,
+  "discoveredAccounts": 4,
+  "currentStep": "connect_accounts"
+}
+```
+
+---
+
+#### `GET /api/v1/onboarding/bvn/accounts`
+
+**Response `200`:**
+```json
+{
+  "accounts": [
+    {
+      "id": "665a1b2c3d4e5f6789012345",
+      "institution": "GTBank",
+      "maskedAccountNumber": "****4471",
+      "accountType": "current",
+      "balance": 245000,
+      "currency": "NGN",
+      "holderName": "Chike Okafor"
+    }
+  ]
+}
+```
+
+---
+
+#### `POST /api/v1/onboarding/bvn/connect`
+
+**Body:**
+```json
+{
+  "accountIds": ["665a1b2c3d4e5f6789012345", "665a1b2c3d4e5f6789012346"]
+}
+```
+
+**Response `201`:**
+```json
+{
+  "message": "2 account(s) connected successfully",
+  "accounts": [
+    {
+      "id": "665a1b2c3d4e5f6789012347",
+      "institution": "GTBank",
+      "maskedAccountNumber": "****4471",
+      "balance": 245000,
+      "accountType": "current"
+    }
+  ],
+  "onboardingComplete": true
+}
+```
 
 ---
 
@@ -549,8 +840,10 @@ Use this to pick the right endpoint in the UI:
 
 | Frontend page | API calls |
 |---------------|-----------|
-| Login / Register | `POST /auth/login`, `POST /auth/register` |
-| Onboarding — link banks | `GET /institutions`, `POST /accounts/link` |
+| Sign up + email OTP | `POST /auth/register`, `POST /auth/verify-otp` |
+| Login / forgot password | `POST /auth/login`, `POST /auth/forgot-password`, `POST /auth/reset-password` |
+| BVN onboarding (mock) | `GET /onboarding/status`, `POST /onboarding/bvn/submit`, `POST /onboarding/bvn/verify-otp`, `GET /onboarding/bvn/accounts`, `POST /onboarding/bvn/connect` |
+| Manual account link (optional) | `GET /institutions`, `POST /accounts/link` |
 | Dashboard home | `GET /dashboard/summary`, `GET /dashboard/balance-trend` |
 | Accounts list | `GET /accounts`, `DELETE /accounts/:id` |
 | Transactions list | `GET /transactions` (with filters) |

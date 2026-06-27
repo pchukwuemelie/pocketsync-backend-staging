@@ -89,7 +89,7 @@ export const getTransactions = async (req: Request, res: Response): Promise<void
     }
 
     const pageNum = Math.max(1, parseInt(page as string));
-    const limitNum = Math.min(30, parseInt(limit as string)); // Hard cap at 30 per PRD
+    const limitNum = Math.min(30, parseInt(limit as string)); // Hard cap at 30 
     const skip = (pageNum - 1) * limitNum;
 
     const [transactions, total] = await Promise.all([

@@ -16,7 +16,7 @@ export const errorHandler = (
   // Log full error server-side
   console.error(`[ERROR] ${err.message}`, process.env.NODE_ENV === 'development' ? err.stack : '');
 
-  // Only safe message to client — no stack traces in production
+  // Only safe message to client — no stack traces in prod
   res.status(statusCode).json({
     error:
       process.env.NODE_ENV === 'development'

@@ -11,6 +11,27 @@ info:
     the server sets `accessToken` and `refreshToken` cookies. All protected routes require
     the browser/client to send cookies (`credentials: 'include'` in fetch, `withCredentials: true` in axios).
 
+    ## Sign-up & password reset (email OTP)
+    1. `POST /api/v1/auth/register` — creates account, sends 6-digit email OTP
+    2. `POST /api/v1/auth/verify-otp` with `purpose: signup` — marks email verified
+    3. `POST /api/v1/auth/login` — blocked until email is verified (`403`)
+    4. Forgot password: `POST /api/v1/auth/forgot-password` → `POST /api/v1/auth/reset-password`
+
+    OTP resend cooldown is **30 seconds**. Codes expire in **10 minutes**.
+    Without `RESEND_API_KEY`, OTPs are logged to the server console; in development the code
+    may also appear in the JSON response as `devOtp`.
+
+    ## BVN onboarding (mocked — Phase 2)
+    After email verification and login, complete onboarding:
+    1. `GET /api/v1/onboarding/status` — route user to the correct step
+    2. `POST /api/v1/onboarding/bvn/submit` — mock BVN + phone validation, sends SMS OTP
+    3. `POST /api/v1/onboarding/bvn/verify-otp` — verifies phone, discovers mock accounts
+    4. `GET /api/v1/onboarding/bvn/accounts` — list accounts to connect
+    5. `POST /api/v1/onboarding/bvn/connect` — link selected accounts
+
+    BVN lookup and SMS are **mocked** — no real provider calls. OTPs log to server console;
+    `devOtp` may appear in development responses.
+
     ## Amounts
     All monetary values in API **requests and responses** are in **NGN (Naira)**.
     Internally amounts are stored in kobo; the API converts for you.
@@ -31,6 +52,7 @@ servers:
 tags:
   - name: Health
   - name: Auth
+  - name: Onboarding
   - name: Institutions
   - name: Accounts
   - name: Transactions
@@ -63,8 +85,10 @@ paths:
               $ref: '#/components/schemas/RegisterRequest'
             example:
               email: user@example.com
-              username: chike
+              fullName: Chike Okafor
               password: SecurePass123
+              confirmPassword: SecurePass123
+              termsAccepted: true
       responses:
         '201':
           description: Account created
@@ -124,8 +148,151 @@ paths:
                 $ref: '#/components/schemas/Error'
               example:
                 error: Invalid credentials
+        '403':
+          description: Email not verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmailNotVerifiedError'
         '429':
           $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v1/auth/send-otp:
+    post:
+      tags: [Auth]
+      summary: Resend email verification code
+      description: |
+        Resends a 6-digit OTP for `signup` or `reset` purposes.
+        Subject to a 30-second resend cooldown per email + purpose.
+      operationId: sendOtp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendOtpRequest'
+            example:
+              email: user@example.com
+              purpose: signup
+      responses:
+        '200':
+          description: Verification code sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OtpSentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Account not found (signup purpose only)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Resend cooldown active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OtpCooldownError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v1/auth/verify-otp:
+    post:
+      tags: [Auth]
+      summary: Verify email OTP
+      description: |
+        Validates a 6-digit code. For `purpose: signup`, marks the user's email as verified.
+        For `purpose: reset`, only validates the code (use `reset-password` to set a new password).
+      operationId: verifyOtp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyOtpRequest'
+            example:
+              email: user@example.com
+              code: '123456'
+              purpose: signup
+      responses:
+        '200':
+          description: Code accepted
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SignupVerifyResponse'
+                  - $ref: '#/components/schemas/ResetVerifyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v1/auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request password reset code
+      description: |
+        Always returns the same success message whether or not the email exists (prevents enumeration).
+        Sends a 6-digit OTP with `purpose: reset` when the account exists.
+      operationId: forgotPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+            example:
+              email: user@example.com
+      responses:
+        '200':
+          description: Generic success message
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForgotPasswordResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v1/auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Reset password with OTP
+      description: Verifies the reset OTP and sets a new password. Invalidates existing refresh tokens.
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+            example:
+              email: user@example.com
+              code: '123456'
+              newPassword: NewSecurePass123
+      responses:
+        '200':
+          description: Password updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Password reset successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/ServerError'
 
@@ -178,6 +345,167 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v1/onboarding/status:
+    get:
+      tags: [Onboarding]
+      summary: Get onboarding progress
+      description: Use `currentStep` to route the user after login.
+      operationId: getOnboardingStatus
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Onboarding status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v1/onboarding/bvn/submit:
+    post:
+      tags: [Onboarding]
+      summary: Submit BVN and phone (mock validation)
+      description: Accepts any valid 11-digit BVN and Nigerian phone. Sends mock SMS OTP.
+      operationId: submitBvn
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BvnSubmitRequest'
+            example:
+              bvn: '22234567890'
+              phone: '08012345678'
+      responses:
+        '200':
+          description: BVN accepted, OTP sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BvnSubmitResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: BVN already linked to another account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v1/onboarding/bvn/send-otp:
+    post:
+      tags: [Onboarding]
+      summary: Resend phone OTP
+      operationId: sendBvnOtp
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: OTP sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhoneOtpSentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: Resend cooldown active
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OtpCooldownError'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v1/onboarding/bvn/verify-otp:
+    post:
+      tags: [Onboarding]
+      summary: Verify phone OTP and discover accounts
+      operationId: verifyBvnOtp
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhoneOtpVerifyRequest'
+      responses:
+        '200':
+          description: Phone verified, mock accounts discovered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BvnVerifyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v1/onboarding/bvn/accounts:
+    get:
+      tags: [Onboarding]
+      summary: List discovered accounts from BVN
+      operationId: getDiscoveredAccounts
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Unlinked discovered accounts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoveredAccountsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /api/v1/onboarding/bvn/connect:
+    post:
+      tags: [Onboarding]
+      summary: Connect selected discovered accounts
+      operationId: connectDiscoveredAccounts
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BvnConnectRequest'
+      responses:
+        '201':
+          description: Accounts linked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BvnConnectResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/ServerError'
 
@@ -665,16 +993,25 @@ components:
 
     RegisterRequest:
       type: object
-      required: [email, password]
+      required: [email, fullName, password, termsAccepted]
       properties:
         email:
           type: string
           format: email
+        fullName:
+          type: string
+          maxLength: 100
         username:
           type: string
         password:
           type: string
           minLength: 8
+        confirmPassword:
+          type: string
+          minLength: 8
+        termsAccepted:
+          type: boolean
+          description: Must be `true`
 
     RegisterResponse:
       type: object
@@ -683,6 +1020,19 @@ components:
           type: string
         userId:
           type: string
+        emailVerified:
+          type: boolean
+          example: false
+        requiresVerification:
+          type: boolean
+          example: true
+        resendAvailableIn:
+          type: integer
+          description: Seconds until OTP can be resent
+          example: 30
+        devOtp:
+          type: string
+          description: Present in development when email is mocked
 
     LoginRequest:
       type: object
@@ -706,6 +1056,270 @@ components:
               type: string
             email:
               type: string
+            fullName:
+              type: string
+            emailVerified:
+              type: boolean
+            bvnVerified:
+              type: boolean
+
+    EmailNotVerifiedError:
+      type: object
+      properties:
+        error:
+          type: string
+        requiresVerification:
+          type: boolean
+          example: true
+        email:
+          type: string
+          format: email
+
+    SendOtpRequest:
+      type: object
+      required: [email, purpose]
+      properties:
+        email:
+          type: string
+          format: email
+        purpose:
+          type: string
+          enum: [signup, reset]
+
+    VerifyOtpRequest:
+      type: object
+      required: [email, code, purpose]
+      properties:
+        email:
+          type: string
+          format: email
+        code:
+          type: string
+          pattern: '^\d{6}$'
+        purpose:
+          type: string
+          enum: [signup, reset]
+
+    OtpSentResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        resendAvailableIn:
+          type: integer
+        devOtp:
+          type: string
+          description: Present in development when email is mocked
+
+    OtpCooldownError:
+      type: object
+      properties:
+        error:
+          type: string
+        resendAvailableIn:
+          type: integer
+
+    SignupVerifyResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        emailVerified:
+          type: boolean
+          example: true
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+            email:
+              type: string
+            fullName:
+              type: string
+            bvnVerified:
+              type: boolean
+
+    ResetVerifyResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        verified:
+          type: boolean
+          example: true
+
+    ForgotPasswordRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+
+    ForgotPasswordResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: If an account exists for this email, a verification code has been sent
+        devOtp:
+          type: string
+          description: Present in development when account exists and email is mocked
+
+    ResetPasswordRequest:
+      type: object
+      required: [email, code, newPassword]
+      properties:
+        email:
+          type: string
+          format: email
+        code:
+          type: string
+          pattern: '^\d{6}$'
+        newPassword:
+          type: string
+          minLength: 8
+
+    OnboardingStatusResponse:
+      type: object
+      properties:
+        emailVerified:
+          type: boolean
+        bvnVerified:
+          type: boolean
+        phoneVerified:
+          type: boolean
+        currentStep:
+          type: string
+          enum: [bvn_entry, phone_otp, connect_accounts, complete]
+        maskedPhone:
+          type: string
+          example: '+234 *** *** 5678'
+        pendingAccounts:
+          type: integer
+        linkedAccounts:
+          type: integer
+        onboardingComplete:
+          type: boolean
+
+    BvnSubmitRequest:
+      type: object
+      required: [bvn, phone]
+      properties:
+        bvn:
+          type: string
+          pattern: '^\d{11}$'
+        phone:
+          type: string
+          example: '08012345678'
+
+    BvnSubmitResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        maskedPhone:
+          type: string
+        resendAvailableIn:
+          type: integer
+        devOtp:
+          type: string
+
+    PhoneOtpSentResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        maskedPhone:
+          type: string
+        resendAvailableIn:
+          type: integer
+        devOtp:
+          type: string
+
+    PhoneOtpVerifyRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          pattern: '^\d{6}$'
+
+    BvnVerifyResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        bvnVerified:
+          type: boolean
+        phoneVerified:
+          type: boolean
+        discoveredAccounts:
+          type: integer
+        currentStep:
+          type: string
+          example: connect_accounts
+
+    DiscoveredAccountsResponse:
+      type: object
+      properties:
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiscoveredAccount'
+
+    DiscoveredAccount:
+      type: object
+      properties:
+        id:
+          type: string
+        institution:
+          type: string
+        maskedAccountNumber:
+          type: string
+        accountType:
+          type: string
+        balance:
+          type: number
+          description: NGN
+        currency:
+          type: string
+          example: NGN
+        holderName:
+          type: string
+
+    BvnConnectRequest:
+      type: object
+      required: [accountIds]
+      properties:
+        accountIds:
+          type: array
+          items:
+            type: string
+          minItems: 1
+
+    BvnConnectResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        accounts:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              institution:
+                type: string
+              maskedAccountNumber:
+                type: string
+              balance:
+                type: number
+              accountType:
+                type: string
+        onboardingComplete:
+          type: boolean
 
     LinkableInstitution:
       type: string

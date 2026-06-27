@@ -3,9 +3,18 @@ import bcrypt from "bcrypt";
 
 export interface IUser extends Document {
   email: string;
-  username: string;
+  fullName: string;
+  username?: string;
   passwordHash: string;
   refreshTokenHash?: string;
+  emailVerified: boolean;
+  emailVerifiedAt?: Date;
+  termsAcceptedAt?: Date;
+  bvnVerified: boolean;
+  bvnVerifiedAt?: Date;
+  bvnHash?: string;
+  phoneNumber?: string;
+  phoneVerified: boolean;
   createdAt: Date;
   lastLoginAt?: Date;
   isActive: boolean;
@@ -24,11 +33,16 @@ const UserSchema = new Schema<IUser>(
       trim: true,
       match: [/^\S+@\S+\.\S+$/, "Invalid email format"],
     },
-
+    fullName: {
+      type: String,
+      required: [true, "Full name is required"],
+      trim: true,
+      maxlength: 100,
+    },
     username: {
       type: String,
       unique: true,
-      sparse: true, // This allows multiple nulls
+      sparse: true,
       trim: true,
     },
     passwordHash: {
@@ -40,31 +54,54 @@ const UserSchema = new Schema<IUser>(
       type: String,
       select: false,
     },
+    emailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    emailVerifiedAt: { type: Date },
+    termsAcceptedAt: { type: Date },
+    bvnVerified: {
+      type: Boolean,
+      default: false,
+    },
+    bvnVerifiedAt: { type: Date },
+    bvnHash: {
+      type: String,
+      select: false,
+      sparse: true,
+      unique: true,
+    },
+    phoneNumber: {
+      type: String,
+      trim: true,
+    },
+    phoneVerified: {
+      type: Boolean,
+      default: false,
+    },
     lastLoginAt: { type: Date },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true },
 );
 
-// Hash password before save
 UserSchema.pre("save", async function (this: IUser) {
   if (!this.isModified("passwordHash")) return;
   const salt = await bcrypt.genSalt(12);
   this.passwordHash = await bcrypt.hash(this.passwordHash, salt);
 });
 
-// Compare password helper
 UserSchema.methods.comparePassword = async function (
   candidate: string,
 ): Promise<boolean> {
   return bcrypt.compare(candidate, this.passwordHash);
 };
 
-// Strip sensitive fields from JSON responses
 UserSchema.methods.toJSON = function () {
   const obj = this.toObject();
   delete obj.passwordHash;
   delete obj.refreshTokenHash;
+  delete obj.bvnHash;
   return obj;
 };
 
