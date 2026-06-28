@@ -46,9 +46,22 @@ export const sendOtpEmail = async (
     </div>
   `;
 
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[DEV OTP EMAIL] to=${email} purpose=${purpose} code=${code}`);
+  }
+
   if (process.env.RESEND_API_KEY) {
-    await sendViaResend({ to: email, subject, html });
-    return { mocked: false };
+    try {
+      await sendViaResend({ to: email, subject, html });
+      return { mocked: false };
+    } catch (err) {
+      console.error('[EMAIL] Resend delivery failed:', err);
+      if (process.env.NODE_ENV === 'production') {
+        throw err;
+      }
+      console.log(`[EMAIL MOCK] To: ${email} | Purpose: ${purpose} | OTP: ${code}`);
+      return { mocked: true };
+    }
   }
 
   console.log(`[EMAIL MOCK] To: ${email} | Purpose: ${purpose} | OTP: ${code}`);

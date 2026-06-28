@@ -15,10 +15,30 @@ const app = express();
 
 // Security middleware — applied first
 app.use(helmet());
+const devOrigins = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://127.0.0.1:5173",
+];
+const productionOrigin = process.env.ALLOWED_ORIGIN?.replace(/\/$/, "");
+
 app.use(
   cors({
-    origin: process.env.ALLOWED_ORIGIN || "http://localhost:3000",
-    credentials: true, // Required for HttpOnly cookies
+    origin:
+      process.env.NODE_ENV === "production"
+        ? productionOrigin || "https://pocketsync-groupten-mvp.vercel.app"
+        : (origin, callback) => {
+            if (!origin || devOrigins.includes(origin)) {
+              callback(null, true);
+              return;
+            }
+            if (productionOrigin && origin === productionOrigin) {
+              callback(null, true);
+              return;
+            }
+            callback(null, true);
+          },
+    credentials: true,
   }),
 );
 

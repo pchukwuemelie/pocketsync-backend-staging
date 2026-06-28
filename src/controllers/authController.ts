@@ -82,9 +82,26 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
     const existing = await User.findOne({ email: normalisedEmail });
     if (existing) {
-      res
-        .status(409)
-        .json({ error: "An account with this email already exists" });
+      if (existing.emailVerified) {
+        res.status(409).json({
+          error: "An account with this email already exists",
+          emailVerified: true,
+        });
+        return;
+      }
+
+      const otpResult = await issueEmailOtp(normalisedEmail, "signup");
+
+      res.status(200).json({
+        message: otpResult.resent
+          ? "This email is already registered but not verified — a new verification code has been sent"
+          : `This email is already registered but not verified — use your existing code or wait ${otpResult.resendAvailableIn}s to resend`,
+        userId: existing._id,
+        emailVerified: false,
+        requiresVerification: true,
+        resendAvailableIn: otpResult.resendAvailableIn,
+        ...(otpResult.devOtp ? { devOtp: otpResult.devOtp } : {}),
+      });
       return;
     }
 

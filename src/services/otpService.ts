@@ -65,8 +65,9 @@ export const issueEmailOtp = async (
     mocked,
   };
 
-  if (process.env.NODE_ENV === 'development' && mocked) {
+  if (process.env.NODE_ENV !== 'production') {
     result.devOtp = code;
+    console.log(`[DEV OTP] purpose=${purpose} email=${normalised} code=${code}`);
   }
 
   return result;
