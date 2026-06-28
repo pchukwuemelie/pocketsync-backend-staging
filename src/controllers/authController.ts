@@ -6,7 +6,7 @@ import { issueEmailOtp } from "../services/otpService";
 
 const issueTokens = (userId: string, email: string) => {
   const accessToken = jwt.sign(
-    { userId, email },
+    { userId, email }, 
     process.env.JWT_ACCESS_SECRET as string,
     { expiresIn: "15m" },
   );
@@ -29,7 +29,7 @@ const setTokenCookies = (
   res.cookie("accessToken", accessToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
+    sameSite: "none",
     maxAge: 15 * 60 * 1000, // 15 minutes
   });
 
@@ -37,7 +37,7 @@ const setTokenCookies = (
   res.cookie("refreshToken", refreshToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
+    sameSite: "none",
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     path: "/api/v1/auth/refresh",
   });
